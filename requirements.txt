@@ -1,7 +1,4 @@
-# python3-libcamera é instalado via apt (feito pelo setup.sh).
-# O venv usa --system-site-packages para enxergar o libcamera do sistema.
-picamera2
-
+# picamera2 e torch são instalados pelo setup.sh (etapas separadas)
 ultralytics>=8.3.0
 supervision>=0.22.0
 opencv-python-headless>=4.9.0

@@ -7,8 +7,6 @@ set -e
 echo "=== [1/4] Instalando dependências do sistema ==="
 sudo apt-get update
 sudo apt-get install -y \
-    gcc \
-    libcap-dev \
     python3-libcamera \
     libcamera-tools \
     python3-pip \
@@ -25,7 +23,10 @@ echo ""
 echo "=== [3/4] Instalando dependências Python ==="
 source venv/bin/activate
 pip install --upgrade pip
-# PyTorch CPU-only primeiro — evita que o ultralytics puxe a versão CUDA (>1.5GB inúteis no RPi)
+# picamera2 sem dependências opcionais que exigem compilação (PiDNG, python-prctl)
+pip install picamera2 --no-deps
+pip install piexif simplejpeg videodev2
+# PyTorch CPU-only antes do ultralytics — evita baixar pacotes CUDA (>1.5GB inúteis no RPi)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 
