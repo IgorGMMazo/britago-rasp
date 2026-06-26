@@ -7,9 +7,8 @@ set -e
 echo "=== [1/4] Instalando dependências do sistema ==="
 sudo apt-get update
 sudo apt-get install -y \
-    python3-picamera2 \
     python3-libcamera \
-    libcamera-apps \
+    libcamera-tools \
     python3-pip \
     python3-venv \
     libopencv-dev \
