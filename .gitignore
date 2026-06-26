@@ -1,0 +1,8 @@
+weights/*.pt
+weights/*.onnx
+.env
+pedras_grandes/
+venv/
+__pycache__/
+*.pyc
+*.pyo
