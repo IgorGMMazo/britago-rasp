@@ -11,7 +11,6 @@ sudo apt-get install -y \
     libcamera-tools \
     python3-pip \
     python3-venv \
-    libopencv-dev \
     ffmpeg \
     libatlas-base-dev
 
