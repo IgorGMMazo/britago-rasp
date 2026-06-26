@@ -7,6 +7,8 @@ set -e
 echo "=== [1/4] Instalando dependências do sistema ==="
 sudo apt-get update
 sudo apt-get install -y \
+    build-essential \
+    libcap-dev \
     python3-libcamera \
     libcamera-tools \
     python3-pip \
@@ -23,6 +25,8 @@ echo ""
 echo "=== [3/4] Instalando dependências Python ==="
 source venv/bin/activate
 pip install --upgrade pip
+# PyTorch CPU-only primeiro — evita que o ultralytics puxe a versão CUDA (>1.5GB inúteis no RPi)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 
 echo ""
