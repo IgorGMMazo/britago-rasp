@@ -7,7 +7,7 @@ set -e
 echo "=== [1/4] Instalando dependências do sistema ==="
 sudo apt-get update
 sudo apt-get install -y \
-    build-essential \
+    gcc \
     libcap-dev \
     python3-libcamera \
     libcamera-tools \
