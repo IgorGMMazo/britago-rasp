@@ -35,7 +35,13 @@ WEIGHTS     = os.getenv("WEIGHTS", "weights/best.pt")
 PASTA_SAIDA = os.getenv("PASTA_SAIDA", "pedras_grandes")
 DEVICE      = os.getenv("DEVICE", "cpu")
 
-CAMERA_INDEX     = _env_int("CAMERA_INDEX",     0)
+# CAMERA_INDEX aceita duas formas:
+#   - um número ("0", "1"...) -> câmera USB física local (/dev/videoN)
+#   - uma URL ("http://192.168.0.15:5000/video") -> stream de rede,
+#     útil para testar com o webcam_server.py rodando no notebook
+_camera_raw = os.getenv("CAMERA_INDEX", "0")
+CAMERA_SOURCE = int(_camera_raw) if _camera_raw.isdigit() else _camera_raw
+
 CAMERA_WIDTH     = _env_int("CAMERA_WIDTH",     1280)
 CAMERA_HEIGHT    = _env_int("CAMERA_HEIGHT",    720)
 CAMERA_FRAMERATE = _env_int("CAMERA_FRAMERATE", 30)
@@ -127,7 +133,7 @@ smoother        = sv.DetectionsSmoother(length=5)
 contagem_frames: dict[int, int] = {}
 ids_salvos:      set[int]       = set()
 
-cam     = USBCamera(CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE)
+cam     = USBCamera(CAMERA_SOURCE, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE)
 largura = CAMERA_WIDTH
 altura  = CAMERA_HEIGHT
 
