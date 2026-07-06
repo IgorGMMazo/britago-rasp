@@ -1,4 +1,5 @@
-# picamera2 e torch são instalados pelo setup.sh (etapas separadas)
+# torch/torchvision são instalados pelo setup.sh (etapa separada, sem índice
+# especial — em aarch64 o wheel do PyPI já é CPU-only nativamente)
 ultralytics>=8.3.0
 supervision>=0.22.0
 opencv-python-headless>=4.9.0

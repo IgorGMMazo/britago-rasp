@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
-# Executa no Raspberry Pi 4B com Raspberry Pi OS (Bullseye ou Bookworm).
-# Necessário: câmera CSI habilitada via raspi-config > Interface Options > Camera
+# Executa no Raspberry Pi 4B com Ubuntu Server 24.04 (noble) — câmera USB (UVC).
+# NÃO usar em Raspberry Pi OS: este script não instala libcamera/picamera2,
+# pois a câmera do projeto é USB (driver UVC nativo do kernel, sem dependências
+# específicas de fabricante).
 
 set -e
 
 echo "=== [1/4] Instalando dependências do sistema ==="
 sudo apt-get update
 sudo apt-get install -y \
-    python3-libcamera \
-    libcamera-tools \
     python3-pip \
     python3-venv \
     ffmpeg \
-    libatlas-base-dev
+    libatlas-base-dev \
+    v4l-utils
 
 echo ""
 echo "=== [2/4] Criando ambiente virtual ==="
-# --system-site-packages expõe picamera2 (instalada via apt) dentro do venv
-python3 -m venv venv --system-site-packages
+python3 -m venv venv
 
 echo ""
 echo "=== [3/4] Instalando dependências Python ==="
 source venv/bin/activate
 pip install --upgrade pip
-# picamera2 sem dependências opcionais que exigem compilação (PiDNG, python-prctl)
-pip install picamera2 --no-deps
-pip install piexif simplejpeg videodev2
-# PyTorch CPU-only antes do ultralytics — evita baixar pacotes CUDA (>1.5GB inúteis no RPi)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# PyTorch: em aarch64 (ARM 64-bit), o wheel oficial do PyPI já é CPU-only
+# nativamente — não existe build CUDA pra essa arquitetura em hardware comum
+# como o Pi 4B. Por isso não precisamos apontar pra um índice especial: o pip
+# já resolve sozinho o wheel correto (torch-*-cp312-cp312-manylinux_*_aarch64.whl).
+pip install torch torchvision
+
 pip install -r requirements.txt
 
 echo ""
@@ -45,13 +47,18 @@ echo "=========================================="
 echo " Setup concluído!"
 echo "=========================================="
 echo ""
+echo " Confirme que a câmera USB foi reconhecida pelo kernel:"
+echo "   v4l2-ctl --list-devices"
+echo "   (deve listar algo como /dev/video0)"
+echo ""
 echo " Próximos passos:"
-echo "   1. Copie o modelo treinado:"
-echo "        scp best.pt pi@<ip-do-rasp>:$(pwd)/weights/best.pt"
+echo "   1. Confirme que o modelo treinado está em weights/best.pt"
+echo "        (se precisar copiar do seu notebook:"
+echo "         scp best.pt igormazo@<ip-do-rasp>:$(pwd)/weights/best.pt)"
 echo ""
 echo "   2. Configure o arquivo .env:"
 echo "        nano .env"
-echo "      (ajuste URL_WEBHOOK, PHONE, ROI e parâmetros de câmera)"
+echo "      (ajuste URL_WEBHOOK, PHONE, ROI, CAMERA_INDEX e parâmetros de câmera)"
 echo ""
 echo "   3. Inicie o sistema:"
 echo "        ./run.sh"

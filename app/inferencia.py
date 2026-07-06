@@ -1,7 +1,7 @@
 """
-Inferência YOLO + ByteTrack + dHash — câmera CSI (Raspberry Pi 4B).
+Inferência YOLO + ByteTrack + dHash — câmera USB (Raspberry Pi 4B, Ubuntu Server).
 
-Captura frames pela entrada CSI via picamera2, detecta pedras grandes dentro
+Captura frames pela câmera USB via OpenCV, detecta pedras grandes dentro
 do ROI e salva recortes "limpos" (sem marcações) em PASTA_SAIDA.
 A triagem por dHash evita salvar a mesma pedra repetidamente.
 """
@@ -20,7 +20,7 @@ import supervision as sv
 from PIL import Image
 import imagehash
 
-from camera import CSICamera
+from camera import USBCamera
 
 
 # ── Configuração via variáveis de ambiente ─────────────────────────────────
@@ -35,6 +35,7 @@ WEIGHTS     = os.getenv("WEIGHTS", "weights/best.pt")
 PASTA_SAIDA = os.getenv("PASTA_SAIDA", "pedras_grandes")
 DEVICE      = os.getenv("DEVICE", "cpu")
 
+CAMERA_INDEX     = _env_int("CAMERA_INDEX",     0)
 CAMERA_WIDTH     = _env_int("CAMERA_WIDTH",     1280)
 CAMERA_HEIGHT    = _env_int("CAMERA_HEIGHT",    720)
 CAMERA_FRAMERATE = _env_int("CAMERA_FRAMERATE", 30)
@@ -126,7 +127,7 @@ smoother        = sv.DetectionsSmoother(length=5)
 contagem_frames: dict[int, int] = {}
 ids_salvos:      set[int]       = set()
 
-cam     = CSICamera(CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE)
+cam     = USBCamera(CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE)
 largura = CAMERA_WIDTH
 altura  = CAMERA_HEIGHT
 

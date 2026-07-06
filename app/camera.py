@@ -1,54 +1,46 @@
 """
-Abstração da câmera CSI via picamera2.
-Interface compatível com cv2.VideoCapture (read / get / release).
+Abstração da câmera USB via OpenCV (driver UVC — nativo do kernel Linux,
+sem dependências específicas de fabricante como libcamera/picamera2).
+Interface compatível com o pipeline: read / get / release.
 """
 
 import cv2
 
-try:
-    from picamera2 import Picamera2
-    _PICAM_OK = True
-except ImportError:
-    _PICAM_OK = False
 
-
-class CSICamera:
-    def __init__(self, width: int = 1280, height: int = 720, framerate: int = 30):
-        if not _PICAM_OK:
-            raise RuntimeError(
-                "picamera2 não encontrada.\n"
-                "Instale com: sudo apt install -y python3-picamera2\n"
-                "e crie o venv com: python3 -m venv venv --system-site-packages"
-            )
-        self.width  = width
+class USBCamera:
+    def __init__(self, index: int = 0, width: int = 1280, height: int = 720, framerate: int = 30):
+        self.width = width
         self.height = height
-        self._cam   = Picamera2()
-        cfg = self._cam.create_video_configuration(
-            main={"size": (width, height), "format": "RGB888"},
-            controls={"FrameRate": float(framerate)},
+        self._cap = cv2.VideoCapture(index)
+
+        if not self._cap.isOpened():
+            raise RuntimeError(
+                f"Não foi possível abrir a câmera USB no índice {index}.\n"
+                "Verifique com: v4l2-ctl --list-devices\n"
+                "e confira se o dispositivo aparece como /dev/video0 (ou similar)."
+            )
+
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self._cap.set(cv2.CAP_PROP_FPS, framerate)
+
+        largura_real = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        altura_real  = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(
+            f"🎥 Câmera USB iniciada: {largura_real}x{altura_real} "
+            f"(índice {index}, pedido {width}x{height})",
+            flush=True,
         )
-        self._cam.configure(cfg)
-        self._cam.start()
-        print(f"🎥 Câmera CSI iniciada: {width}x{height} @ {framerate}fps", flush=True)
 
     def read(self):
-        try:
-            frame_rgb = self._cam.capture_array()
-            return True, cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        except Exception as e:
-            print(f"⚠️  Erro na captura: {e}", flush=True)
+        ret, frame = self._cap.read()
+        if not ret:
+            print("⚠️  Erro na captura do frame", flush=True)
             return False, None
+        return True, frame
 
     def get(self, prop):
-        if prop == cv2.CAP_PROP_FRAME_WIDTH:
-            return float(self.width)
-        if prop == cv2.CAP_PROP_FRAME_HEIGHT:
-            return float(self.height)
-        return 0.0
+        return self._cap.get(prop)
 
     def release(self):
-        try:
-            self._cam.stop()
-            self._cam.close()
-        except Exception:
-            pass
+        self._cap.release()
