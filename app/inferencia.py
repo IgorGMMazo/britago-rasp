@@ -1,5 +1,5 @@
 """
-Inferência YOLO + ByteTrack + dHash — câmera USB (Raspberry Pi 4B, Ubuntu Server).
+Inferência YOLO + ByteTrack + dHash — câmera USB (Raspberry Pi 4B, Ubuntu Server). 123
 
 Captura frames pela câmera USB via OpenCV, detecta pedras grandes dentro
 do ROI e salva recortes "limpos" (sem marcações) em PASTA_SAIDA.
