@@ -159,6 +159,7 @@ try:
             persist = True,
             device  = DEVICE,
             verbose = False,
+            fuse = False,
         )
 
         detections = sv.Detections.from_ultralytics(results[0])
