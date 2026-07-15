@@ -7,6 +7,7 @@ A triagem por dHash evita salvar a mesma pedra repetidamente.
 """
 
 import os
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;5000000"
 import cv2
 import time
 import queue
