@@ -48,6 +48,7 @@ class USBCamera:
         framerate: int = 30,
         max_falhas_antes_reconectar: int = 5,
         atraso_reconexao_s: float = 2.0,
+        atraso_reconexao_maximo_s: float = 30.0,
     ):
         self.source = source
         self.width = width
@@ -55,6 +56,7 @@ class USBCamera:
         self.framerate = framerate
         self.max_falhas_antes_reconectar = max_falhas_antes_reconectar
         self.atraso_reconexao_s = atraso_reconexao_s
+        self.atraso_reconexao_maximo_s = atraso_reconexao_maximo_s
 
         self._cap = None
         self._frame = None
@@ -111,7 +113,8 @@ class USBCamera:
         self._cap = cap
 
     def _loop_captura(self):
-        falhas_consecutivas = 0
+        falhas_consecutivas  = 0
+        tentativas_reconexao = 0
 
         while not self._parar.is_set():
             ret, frame = self._cap.read()
@@ -128,12 +131,26 @@ class USBCamera:
                     self._ret = False
 
                 if falhas_consecutivas >= self.max_falhas_antes_reconectar:
+                    # Backoff exponencial: um NVR/câmera que derrubou a
+                    # sessão pode levar dezenas de segundos para liberá-la
+                    # de novo — reconectar rápido demais só bate na mesma
+                    # trava (reset/timeout logo de cara).
+                    atraso = min(
+                        self.atraso_reconexao_s * (2 ** tentativas_reconexao),
+                        self.atraso_reconexao_maximo_s,
+                    )
                     print(
                         f"🔄 Muitas falhas seguidas — reconectando em "
-                        f"{self.atraso_reconexao_s:.0f}s...",
+                        f"{atraso:.0f}s...",
                         flush=True,
                     )
-                    time.sleep(self.atraso_reconexao_s)
+                    time.sleep(atraso)
+                    # Cresce a cada ciclo de reconexão, mesmo que
+                    # _abrir_captura() "funcione" (isOpened=True) — no
+                    # UniFi Protect isso já aconteceu com a sessão ainda
+                    # presa, e as leituras seguintes voltaram a falhar.
+                    # Só zera quando um frame é lido de verdade (abaixo).
+                    tentativas_reconexao += 1
                     try:
                         self._abrir_captura()
                     except RuntimeError as erro:
@@ -143,7 +160,8 @@ class USBCamera:
                     time.sleep(0.05)
                 continue
 
-            falhas_consecutivas = 0
+            falhas_consecutivas  = 0
+            tentativas_reconexao = 0
             with self._lock:
                 self._frame = frame
                 self._ret = True
