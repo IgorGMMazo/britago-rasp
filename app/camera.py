@@ -37,7 +37,14 @@ class USBCamera:
         if self._cap is not None:
             self._cap.release()
 
-        self._cap = cv2.VideoCapture(self.source)
+        if isinstance(self.source, str):
+            # Stream de rede (RTSP/MJPEG): força o backend FFmpeg para que
+            # OPENCV_FFMPEG_CAPTURE_OPTIONS (rtsp_transport;tcp) tenha efeito.
+            # Sem isso o OpenCV pode cair no GStreamer, que ignora a opção.
+            self._cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+        else:
+            # Câmera USB local (índice /dev/videoN) → backend padrão (V4L2).
+            self._cap = cv2.VideoCapture(self.source)
         if not self._cap.isOpened():
             raise RuntimeError(
                 f"Não foi possível abrir a fonte de vídeo '{self.source}'.\n"
