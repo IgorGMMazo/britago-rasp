@@ -11,21 +11,32 @@ Abstração da câmera via OpenCV. Aceita duas formas de fonte de vídeo:
 
 Interface compatível com o pipeline: read / get / release.
 
-A leitura roda em uma thread dedicada, separada do consumidor (inferência
-YOLO). Isso é necessário porque RTSP/RTSPS é um stream "empurrado" pela
-câmera em tempo real: se o consumidor (inferência, lenta na CPU do Pi) não
-lê os frames tão rápido quanto eles chegam, o buffer acumula atraso e a
-câmera/NVR acaba derrubando a conexão TLS (erro típico do ffmpeg:
-"[tls @ ...] IO error: End of file"). A thread aqui drena o stream
-continuamente e sempre expõe o frame mais recente, descartando os
-intermediários — o consumidor nunca fica "atrasado" para a câmera.
-Também reconecta automaticamente se a leitura falhar repetidas vezes.
+Notas sobre RTSP/RTSPS:
+
+- RTSPS só criptografa o canal de *sinalização* RTSP via TLS. O RTP de
+  mídia em si, por padrão, ainda tenta ir por UDP — se a rede entre o Pi
+  e a câmera/NVR não deixa esse UDP passar (comum atrás de VPN/NAT), o
+  canal de controle abre normalmente mas nenhum frame chega, e o ffmpeg
+  acaba derrubando a conexão ("[tls @ ...] IO error: End of file").
+  Por isso forçamos `rtsp_transport=tcp`, que faz o RTP viajar
+  interleaved dentro da mesma conexão TCP/TLS já aberta.
+- A leitura roda em uma thread dedicada, separada do consumidor
+  (inferência YOLO, lenta na CPU do Pi), sempre expondo o frame mais
+  recente e descartando os intermediários — o consumidor nunca fica
+  "atrasado" em relação à câmera. Também reconecta automaticamente se a
+  leitura falhar repetidas vezes.
 """
 
+import os
 import time
 import threading
 
 import cv2
+
+# Força o transporte RTP em TCP (interleaved) em vez do padrão UDP do
+# ffmpeg. Precisa estar setado antes de cv2.VideoCapture() abrir a fonte.
+# Não afeta fontes que não sejam RTSP (ex.: câmera USB local).
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 
 class USBCamera:
