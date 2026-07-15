@@ -168,7 +168,6 @@ t_log       = time.time()
 try:
     while True:
         ret, frame = cam.read()
-        print("Frame capturado")
         if not ret:
             time.sleep(0.05)
             continue
