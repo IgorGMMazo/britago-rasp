@@ -18,6 +18,8 @@ PHONE                 = os.getenv("PHONE", "5562982878127")
 MENSAGEM              = os.getenv(
     "MENSAGEM", "Pedra grande detectada. A pedra é grande de fato?"
 )
+BACKOFF_BASE_S        = int(os.getenv("BACKOFF_BASE_S", "5"))
+BACKOFF_MAXIMO_S      = int(os.getenv("BACKOFF_MAXIMO_S", "300"))
 
 if not URL_WEBHOOK:
     raise SystemExit(
@@ -27,6 +29,14 @@ if not URL_WEBHOOK:
 
 os.makedirs(CAMINHO_PASTA, exist_ok=True)
 arquivos_enviados = set()
+
+# Backoff exponencial por arquivo: sem isso, um arquivo que falha (ex.:
+# webhook fora do ar) é retentado a cada INTERVALO_VERIFICACAO segundos
+# para sempre, martelando rede/CPU do Pi indefinidamente durante uma
+# indisponibilidade prolongada — o que já observamos coincidir com
+# quedas da conexão RTSPS da câmera (mesma interface de rede do Pi).
+tentativas_falhas  = {}  # nome_arquivo -> nº de falhas consecutivas
+proxima_tentativa  = {}  # nome_arquivo -> timestamp da próxima tentativa permitida
 
 
 def enviar_para_whatsapp(caminho_arquivo, nome_arquivo):
@@ -66,16 +76,31 @@ def main():
     print(f"🔍 Monitorando {CAMINHO_PASTA} (intervalo {INTERVALO_VERIFICACAO}s)...", flush=True)
     try:
         while True:
+            agora = time.time()
             for arquivo in os.listdir(CAMINHO_PASTA):
                 if not arquivo.lower().endswith((".jpg", ".jpeg", ".png")):
                     continue
                 if arquivo in arquivos_enviados:
+                    continue
+                if proxima_tentativa.get(arquivo, 0) > agora:
                     continue
 
                 caminho_completo = os.path.join(CAMINHO_PASTA, arquivo)
                 time.sleep(0.5)
                 if enviar_para_whatsapp(caminho_completo, arquivo):
                     arquivos_enviados.add(arquivo)
+                    tentativas_falhas.pop(arquivo, None)
+                    proxima_tentativa.pop(arquivo, None)
+                else:
+                    falhas = tentativas_falhas.get(arquivo, 0) + 1
+                    tentativas_falhas[arquivo] = falhas
+                    atraso = min(BACKOFF_BASE_S * (2 ** falhas), BACKOFF_MAXIMO_S)
+                    proxima_tentativa[arquivo] = time.time() + atraso
+                    print(
+                        f"⏳ Próxima tentativa de {arquivo} em {atraso:.0f}s "
+                        f"(falha #{falhas})",
+                        flush=True,
+                    )
 
             time.sleep(INTERVALO_VERIFICACAO)
     except KeyboardInterrupt:
