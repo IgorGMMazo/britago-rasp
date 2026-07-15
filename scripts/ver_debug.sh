@@ -39,7 +39,7 @@ mostrar_um() {
         return 1
     fi
     echo "Frame: $(basename "$f")  |  $(date -r "$f" '+%H:%M:%S')  |  total no buffer: $(ls "$DEBUG_DIR"/*.jpg 2>/dev/null | wc -l)"
-    chafa --size=100x50 "$f"
+    chafa --symbols=all "$f"
 }
 
 if [ "$1" = "--watch" ]; then
