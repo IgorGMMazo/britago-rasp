@@ -10,7 +10,6 @@ import os
 import cv2
 import time
 import queue
-import signal
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -166,19 +165,10 @@ altura  = CAMERA_HEIGHT
 frame_count = 0
 t_log       = time.time()
 
-
-# run.sh encerra este processo com `kill` (SIGTERM), não Ctrl+C (SIGINT).
-# Sem isto, o bloco `finally` abaixo nunca roda e cam.release() nunca é
-# chamado — a sessão RTSPS fica pendurada no NVR e a próxima conexão
-# colide com ela (reset/timeout logo no início do próximo run).
-def _handler_sigterm(signum, frame):
-    raise KeyboardInterrupt
-
-signal.signal(signal.SIGTERM, _handler_sigterm)
-
 try:
     while True:
         ret, frame = cam.read()
+        print("Frame capturado")
         if not ret:
             time.sleep(0.05)
             continue
