@@ -13,7 +13,8 @@ sudo apt-get install -y \
     python3-venv \
     ffmpeg \
     libatlas-base-dev \
-    v4l-utils
+    v4l-utils \
+    chafa
 
 echo ""
 echo "=== [2/4] Criando ambiente virtual ==="
@@ -41,6 +42,7 @@ if [ ! -f .env ]; then
 fi
 
 chmod +x run.sh
+chmod +x scripts/ver_debug.sh 2>/dev/null || true
 
 echo ""
 echo "=========================================="
@@ -62,6 +64,9 @@ echo "      (ajuste URL_WEBHOOK, PHONE, ROI, CAMERA_INDEX e parâmetros de câme
 echo ""
 echo "   3. Inicie o sistema:"
 echo "        ./run.sh"
+echo ""
+echo "   Para conferir ao vivo o que a câmera/ROI estão vendo, direto por SSH:"
+echo "        ./scripts/ver_debug.sh --watch"
 echo ""
 echo " Para iniciar automaticamente no boot:"
 echo "   sudo bash -c \"cat > /etc/systemd/system/britago.service << EOF"

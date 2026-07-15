@@ -11,6 +11,7 @@ import cv2
 import time
 import queue
 import threading
+from collections import deque
 from pathlib import Path
 from datetime import datetime
 
@@ -39,10 +40,6 @@ WEIGHTS     = os.getenv("WEIGHTS", "weights/best.pt")
 PASTA_SAIDA = os.getenv("PASTA_SAIDA", "pedras_grandes")
 DEVICE      = os.getenv("DEVICE", "cpu")
 
-# CAMERA_INDEX aceita duas formas:
-#   - um número ("0", "1"...) -> câmera USB física local (/dev/videoN)
-#   - uma URL ("http://192.168.0.15:5000/video") -> stream de rede,
-#     útil para testar com o webcam_server.py rodando no notebook
 _camera_raw = os.getenv("CAMERA_INDEX", "0")
 CAMERA_SOURCE = int(_camera_raw) if _camera_raw.isdigit() else _camera_raw
 
@@ -64,10 +61,19 @@ ROI_W    = _env_int("ROI_W", 945)
 ROI_H    = _env_int("ROI_H", 674)
 AREA_ROI = ROI_W * ROI_H
 
-# ── Debug visual: salva cada frame com ROI + boxes desenhados ─────────────
-DEBUG_DIR = os.getenv("DEBUG_DIR", "debug_frames")
-DEBUG_LIMPEZA_SEGUNDOS = _env_int("DEBUG_LIMPEZA_SEGUNDOS", 120)
+# ── Debug visual: mantém só os últimos N frames com ROI + boxes desenhados ─
+# Serve para inspecionar ao vivo o que o pipeline está enxergando (via
+# scripts/ver_debug.sh), sem deixar a pasta crescer sem limite.
+DEBUG_DIR        = os.getenv("DEBUG_DIR", "debug_frames")
+DEBUG_MAX_FRAMES = _env_int("DEBUG_MAX_FRAMES", 100)
+
 Path(DEBUG_DIR).mkdir(parents=True, exist_ok=True)
+# Limpa frames de uma execução anterior: essa pasta é só diagnóstico ao
+# vivo, não faz sentido acumular entre reinícios do processo.
+for _f in Path(DEBUG_DIR).glob("*.jpg"):
+    _f.unlink(missing_ok=True)
+
+debug_frames_buffer: "deque[Path]" = deque()
 
 Path(PASTA_SAIDA).mkdir(parents=True, exist_ok=True)
 
@@ -130,26 +136,6 @@ thread_filtro = threading.Thread(target=worker_filtro_hashing, daemon=True)
 thread_filtro.start()
 
 
-def worker_limpeza_debug():
-    while True:
-        time.sleep(DEBUG_LIMPEZA_SEGUNDOS)
-        agora = time.time()
-        removidos = 0
-        for f in Path(DEBUG_DIR).glob("*.jpg"):
-            try:
-                if agora - f.stat().st_mtime > DEBUG_LIMPEZA_SEGUNDOS:
-                    f.unlink()
-                    removidos += 1
-            except FileNotFoundError:
-                pass
-        if removidos:
-            print(f"🧹 Limpeza {DEBUG_DIR}: {removidos} arquivo(s) removido(s)", flush=True)
-
-
-thread_limpeza_debug = threading.Thread(target=worker_limpeza_debug, daemon=True)
-thread_limpeza_debug.start()
-
-
 # ── Detecção e rastreamento ────────────────────────────────────────────────
 def ponto_dentro_roi(cx, cy, rx, ry, rw, rh) -> bool:
     return rx <= cx <= rx + rw and ry <= cy <= ry + rh
@@ -176,76 +162,93 @@ try:
             time.sleep(0.05)
             continue
 
-        frame_count         += 1
-        frame_original_limpo = frame.copy()
+        frame_count += 1
 
-        results = model.track(
-            source  = frame,
-            imgsz   = IMGSZ,
-            conf    = CONF,
-            iou     = IOU,
-            tracker = "bytetrack.yaml",
-            persist = True,
-            device  = DEVICE,
-            verbose = False,
-        )
+        try:
+            frame_original_limpo = frame.copy()
 
-        detections = sv.Detections.from_ultralytics(results[0])
-        detections = smoother.update_with_detections(detections)
+            results = model.track(
+                source  = frame,
+                imgsz   = IMGSZ,
+                conf    = CONF,
+                iou     = IOU,
+                tracker = "bytetrack.yaml",
+                persist = True,
+                device  = DEVICE,
+                verbose = False,
+            )
 
-        ids_frame_atual = set()
+            detections = sv.Detections.from_ultralytics(results[0])
+            detections = smoother.update_with_detections(detections)
 
-        for i in range(len(detections)):
-            x1, y1, x2, y2 = map(int, detections.xyxy[i])
-            track_id = int(detections.tracker_id[i]) if detections.tracker_id is not None else -1
+            ids_frame_atual = set()
 
-            cx = (x1 + x2) // 2
-            cy = (y1 + y2) // 2
-            if not ponto_dentro_roi(cx, cy, ROI_X, ROI_Y, ROI_W, ROI_H):
-                continue
+            for i in range(len(detections)):
+                x1, y1, x2, y2 = map(int, detections.xyxy[i])
+                track_id = int(detections.tracker_id[i]) if detections.tracker_id is not None else -1
 
-            ids_frame_atual.add(track_id)
-            contagem_frames[track_id] = contagem_frames.get(track_id, 0) + 1
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
+                if not ponto_dentro_roi(cx, cy, ROI_X, ROI_Y, ROI_W, ROI_H):
+                    continue
 
-            area_box  = (x2 - x1) * (y2 - y1)
-            proporcao = area_box / AREA_ROI
-            eh_grande = proporcao >= AREA_MINIMA
-            confirmado = contagem_frames[track_id] >= MIN_FRAMES_CONFIRMACAO
+                ids_frame_atual.add(track_id)
+                contagem_frames[track_id] = contagem_frames.get(track_id, 0) + 1
 
-            if eh_grande and confirmado and track_id not in ids_salvos:
-                cx1 = max(0, x1 - MARGEM_COMPARACAO)
-                cy1 = max(0, y1 - MARGEM_COMPARACAO)
-                cx2 = min(largura, x2 + MARGEM_COMPARACAO)
-                cy2 = min(altura,  y2 + MARGEM_COMPARACAO)
-                crop = frame_original_limpo[cy1:cy2, cx1:cx2]
+                area_box  = (x2 - x1) * (y2 - y1)
+                proporcao = area_box / AREA_ROI
+                eh_grande = proporcao >= AREA_MINIMA
+                confirmado = contagem_frames[track_id] >= MIN_FRAMES_CONFIRMACAO
 
-                if crop.size > 0:
-                    fila_processamento.put((crop, crop.copy(), track_id, proporcao))
-                    ids_salvos.add(track_id)
+                if eh_grande and confirmado and track_id not in ids_salvos:
+                    cx1 = max(0, x1 - MARGEM_COMPARACAO)
+                    cy1 = max(0, y1 - MARGEM_COMPARACAO)
+                    cx2 = min(largura, x2 + MARGEM_COMPARACAO)
+                    cy2 = min(altura,  y2 + MARGEM_COMPARACAO)
+                    crop = frame_original_limpo[cy1:cy2, cx1:cx2]
 
-        ids_sumidos = set(contagem_frames.keys()) - ids_frame_atual
-        for tid in ids_sumidos:
-            del contagem_frames[tid]
+                    if crop.size > 0:
+                        fila_processamento.put((crop, crop.copy(), track_id, proporcao))
+                        ids_salvos.add(track_id)
 
-        frame_debug = frame.copy()
-        cv2.rectangle(frame_debug, (ROI_X, ROI_Y), (ROI_X + ROI_W, ROI_Y + ROI_H), (0, 255, 0), 2)
-        for i in range(len(detections)):
-            dx1, dy1, dx2, dy2 = map(int, detections.xyxy[i])
-            cv2.rectangle(frame_debug, (dx1, dy1), (dx2, dy2), (0, 0, 255), 2)
-        ts_debug = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        cv2.imwrite(str(Path(DEBUG_DIR) / f"frame_{ts_debug}.jpg"), frame_debug)
+            ids_sumidos = set(contagem_frames.keys()) - ids_frame_atual
+            for tid in ids_sumidos:
+                del contagem_frames[tid]
 
-        if frame_count % 300 == 0:
-            agora = time.time()
-            fps   = 300.0 / (agora - t_log + 1e-9)
-            t_log = agora
-            with lock_contadores:
-                print(
-                    f"❤️  frames={frame_count} | fps≈{fps:.1f} | "
-                    f"salvas={fotos_salvas} | bloqueadas={fotos_bloqueadas} | "
-                    f"fila={fila_processamento.qsize()}",
-                    flush=True,
-                )
+            # Frame de debug: ROI + boxes desenhados, mantendo só os
+            # DEBUG_MAX_FRAMES mais recentes (buffer circular em disco).
+            frame_debug = frame.copy()
+            cv2.rectangle(frame_debug, (ROI_X, ROI_Y), (ROI_X + ROI_W, ROI_Y + ROI_H), (0, 255, 0), 2)
+            for i in range(len(detections)):
+                dx1, dy1, dx2, dy2 = map(int, detections.xyxy[i])
+                cv2.rectangle(frame_debug, (dx1, dy1), (dx2, dy2), (0, 0, 255), 2)
+
+            ts_debug      = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            caminho_debug = Path(DEBUG_DIR) / f"frame_{ts_debug}.jpg"
+            cv2.imwrite(str(caminho_debug), frame_debug)
+
+            debug_frames_buffer.append(caminho_debug)
+            if len(debug_frames_buffer) > DEBUG_MAX_FRAMES:
+                mais_antigo = debug_frames_buffer.popleft()
+                mais_antigo.unlink(missing_ok=True)
+
+            if frame_count % 300 == 0:
+                agora = time.time()
+                fps   = 300.0 / (agora - t_log + 1e-9)
+                t_log = agora
+                with lock_contadores:
+                    print(
+                        f"❤️  frames={frame_count} | fps≈{fps:.1f} | "
+                        f"salvas={fotos_salvas} | bloqueadas={fotos_bloqueadas} | "
+                        f"fila={fila_processamento.qsize()}",
+                        flush=True,
+                    )
+
+        except Exception as e:
+            # Um frame ruim não deve derrubar o pipeline inteiro (o que
+            # forçaria o systemd a recarregar o modelo do zero). Loga e
+            # segue para o próximo frame.
+            print(f"⚠️  Erro ao processar frame {frame_count}: {e}", flush=True)
 
 except KeyboardInterrupt:
     print("\n🛑 Encerrando inferência...", flush=True)
