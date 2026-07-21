@@ -21,6 +21,7 @@ Interface compatível com o pipeline: read / get / release.
 
 import threading
 import time
+from datetime import datetime
 
 import cv2
 
@@ -35,11 +36,13 @@ class USBCamera:
         self.height    = height
         self.framerate = framerate
 
-        self._cap          = None
-        self._frame_lock    = threading.Lock()
-        self._frame_atual   = None
-        self._frame_novo    = False
-        self._encerrar      = False
+        self._cap                = None
+        self._frame_lock         = threading.Lock()
+        self._frame_atual        = None
+        self._frame_novo         = False
+        self._encerrar           = False
+        self._ts_conexao_aberta  = None
+        self._ts_ultima_queda    = None
 
         self._abrir_captura()
 
@@ -70,8 +73,10 @@ class USBCamera:
 
         largura_real = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         altura_real  = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self._ts_conexao_aberta = time.time()
         print(
-            f"🎥 Fonte de vídeo iniciada: {largura_real}x{altura_real} "
+            f"🎥 [{datetime.now().strftime('%H:%M:%S')}] Fonte de vídeo iniciada: "
+            f"{largura_real}x{altura_real} "
             f"(source={self.source!r}, pedido {self.width}x{self.height})",
             flush=True,
         )
@@ -87,7 +92,23 @@ class USBCamera:
                 print(f"⚠️  Erro na captura do frame ({falhas_seguidas}/{FALHAS_PARA_RECONECTAR})", flush=True)
 
                 if falhas_seguidas >= FALHAS_PARA_RECONECTAR:
-                    print("🔁 Muitas falhas seguidas — tentando reconectar à fonte de vídeo...", flush=True)
+                    agora = time.time()
+                    duracao_sessao = (
+                        agora - self._ts_conexao_aberta if self._ts_conexao_aberta else None
+                    )
+                    intervalo_queda_anterior = (
+                        agora - self._ts_ultima_queda if self._ts_ultima_queda else None
+                    )
+                    detalhes = f"sessão durou {duracao_sessao:.1f}s" if duracao_sessao is not None else "duração da sessão desconhecida"
+                    if intervalo_queda_anterior is not None:
+                        detalhes += f" | {intervalo_queda_anterior:.1f}s desde a queda anterior"
+                    self._ts_ultima_queda = agora
+
+                    print(
+                        f"🔁 [{datetime.now().strftime('%H:%M:%S')}] Muitas falhas seguidas "
+                        f"({detalhes}) — tentando reconectar à fonte de vídeo...",
+                        flush=True,
+                    )
                     try:
                         self._abrir_captura()
                         falhas_seguidas = 0
