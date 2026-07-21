@@ -7,8 +7,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
-# Saídas de debug / frames gerados
-debug_frames/
 *.log
 
 # Imagens de teste (descomente se não quiser versionar)

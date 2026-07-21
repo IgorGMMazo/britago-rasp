@@ -60,11 +60,6 @@ ROI_W    = _env_int("ROI_W", 945)
 ROI_H    = _env_int("ROI_H", 674)
 AREA_ROI = ROI_W * ROI_H
 
-# ── Debug visual: salva cada frame com ROI + boxes desenhados ─────────────
-DEBUG_DIR = os.getenv("DEBUG_DIR", "debug_frames")
-DEBUG_LIMPEZA_SEGUNDOS = _env_int("DEBUG_LIMPEZA_SEGUNDOS", 120)
-Path(DEBUG_DIR).mkdir(parents=True, exist_ok=True)
-
 Path(PASTA_SAIDA).mkdir(parents=True, exist_ok=True)
 
 
@@ -126,26 +121,6 @@ thread_filtro = threading.Thread(target=worker_filtro_hashing, daemon=True)
 thread_filtro.start()
 
 
-def worker_limpeza_debug():
-    while True:
-        time.sleep(DEBUG_LIMPEZA_SEGUNDOS)
-        agora = time.time()
-        removidos = 0
-        for f in Path(DEBUG_DIR).glob("*.jpg"):
-            try:
-                if agora - f.stat().st_mtime > DEBUG_LIMPEZA_SEGUNDOS:
-                    f.unlink()
-                    removidos += 1
-            except FileNotFoundError:
-                pass
-        if removidos:
-            print(f"🧹 Limpeza {DEBUG_DIR}: {removidos} arquivo(s) removido(s)", flush=True)
-
-
-thread_limpeza_debug = threading.Thread(target=worker_limpeza_debug, daemon=True)
-thread_limpeza_debug.start()
-
-
 # ── Detecção e rastreamento ────────────────────────────────────────────────
 def ponto_dentro_roi(cx, cy, rx, ry, rw, rh) -> bool:
     return rx <= cx <= rx + rw and ry <= cy <= ry + rh
@@ -168,7 +143,6 @@ t_log       = time.time()
 try:
     while True:
         ret, frame = cam.read()
-        print("Frame capturado")
         if not ret:
             time.sleep(0.05)
             continue
@@ -224,13 +198,7 @@ try:
         for tid in ids_sumidos:
             del contagem_frames[tid]
 
-        frame_debug = frame.copy()
-        cv2.rectangle(frame_debug, (ROI_X, ROI_Y), (ROI_X + ROI_W, ROI_Y + ROI_H), (0, 255, 0), 2)
-        for i in range(len(detections)):
-            dx1, dy1, dx2, dy2 = map(int, detections.xyxy[i])
-            cv2.rectangle(frame_debug, (dx1, dy1), (dx2, dy2), (0, 0, 255), 2)
-        ts_debug = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        cv2.imwrite(str(Path(DEBUG_DIR) / f"frame_{ts_debug}.jpg"), frame_debug)
+        print(f"👁️  pedras detectadas no frame: {len(ids_frame_atual)}", flush=True)
 
         if frame_count % 300 == 0:
             agora = time.time()

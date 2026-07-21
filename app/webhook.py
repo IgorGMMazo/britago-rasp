@@ -1,8 +1,10 @@
 """
 Monitor da pasta pedras_grandes/ — versão Raspberry Pi.
 
-Observa a pasta de saída e, a cada nova imagem, envia para o webhook
-(WhatsApp) em Base64. Toda configuração vem de variáveis de ambiente.
+Observa a pasta de saída e, a cada nova imagem, envia para o webhook do n8n
+em Base64. Todo o tratamento de imagem/mensagem (comparação, formatação,
+envio ao WhatsApp etc.) é feito pelo workflow do n8n — aqui só entregamos
+a imagem. Toda configuração vem de variáveis de ambiente.
 """
 
 import os
@@ -14,10 +16,6 @@ import requests
 CAMINHO_PASTA         = os.getenv("PASTA_SAIDA", "pedras_grandes")
 URL_WEBHOOK           = os.getenv("URL_WEBHOOK", "")
 INTERVALO_VERIFICACAO = int(os.getenv("INTERVALO_VERIFICACAO", "5"))
-PHONE                 = os.getenv("PHONE", "5562982878127")
-MENSAGEM              = os.getenv(
-    "MENSAGEM", "Pedra grande detectada. A pedra é grande de fato?"
-)
 
 if not URL_WEBHOOK:
     raise SystemExit(
@@ -29,27 +27,20 @@ os.makedirs(CAMINHO_PASTA, exist_ok=True)
 arquivos_enviados = set()
 
 
-def enviar_para_whatsapp(caminho_arquivo, nome_arquivo):
+def enviar_para_n8n(caminho_arquivo, nome_arquivo):
     try:
         with open(caminho_arquivo, "rb") as f:
             string_base64 = base64.b64encode(f.read()).decode("utf-8")
 
         payload = {
-            "phone": PHONE,
-            "message": MENSAGEM,
-            "type": "send-button-list",
-            "buttonList": {
-                "image": f"data:image/jpeg;base64,{string_base64}",
-                "buttons": [
-                    {"id": "1", "label": "SIM"},
-                    {"id": "2", "label": "NÃO"},
-                ],
-            },
+            "filename": nome_arquivo,
+            "mimetype": "image/jpeg",
+            "image_base64": string_base64,
         }
 
         response = requests.post(URL_WEBHOOK, json=payload, timeout=30)
         if response.status_code == 200:
-            print(f"✅ [SUCESSO] {nome_arquivo} enviado com sucesso!", flush=True)
+            print(f"✅ [SUCESSO] {nome_arquivo} enviado ao n8n com sucesso!", flush=True)
             return True
         print(
             f"⚠️ [AVISO] Falha ao enviar {nome_arquivo}. "
@@ -74,7 +65,7 @@ def main():
 
                 caminho_completo = os.path.join(CAMINHO_PASTA, arquivo)
                 time.sleep(0.5)
-                if enviar_para_whatsapp(caminho_completo, arquivo):
+                if enviar_para_n8n(caminho_completo, arquivo):
                     arquivos_enviados.add(arquivo)
 
             time.sleep(INTERVALO_VERIFICACAO)
