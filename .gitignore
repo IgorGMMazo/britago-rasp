@@ -9,6 +9,9 @@ __pycache__/
 
 *.log
 
+# Frames de debug periódicos (gerados em runtime)
+frames_debug/
+
 # Imagens de teste (descomente se não quiser versionar)
 # teste.jpg
 # *.jpg

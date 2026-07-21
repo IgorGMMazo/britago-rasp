@@ -60,6 +60,12 @@ ROI_W    = _env_int("ROI_W", 945)
 ROI_H    = _env_int("ROI_H", 674)
 AREA_ROI = ROI_W * ROI_H
 
+# ── Frames de debug periódicos: 1 a cada N segundos, com ROI + detecções ──
+FRAMES_DEBUG_DIR       = os.getenv("FRAMES_DEBUG_DIR", "frames_debug")
+FRAMES_DEBUG_INTERVALO = _env_int("FRAMES_DEBUG_INTERVALO", 5)
+FRAMES_DEBUG_MAX       = _env_int("FRAMES_DEBUG_MAX", 100)
+Path(FRAMES_DEBUG_DIR).mkdir(parents=True, exist_ok=True)
+
 Path(PASTA_SAIDA).mkdir(parents=True, exist_ok=True)
 
 
@@ -126,6 +132,23 @@ def ponto_dentro_roi(cx, cy, rx, ry, rw, rh) -> bool:
     return rx <= cx <= rx + rw and ry <= cy <= ry + rh
 
 
+def salvar_frame_debug(frame, detections):
+    frame_debug = frame.copy()
+    cv2.rectangle(frame_debug, (ROI_X, ROI_Y), (ROI_X + ROI_W, ROI_Y + ROI_H), (0, 255, 0), 2)
+    for i in range(len(detections)):
+        dx1, dy1, dx2, dy2 = map(int, detections.xyxy[i])
+        cv2.rectangle(frame_debug, (dx1, dy1), (dx2, dy2), (0, 0, 255), 2)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    cv2.imwrite(str(Path(FRAMES_DEBUG_DIR) / f"frame_{ts}.jpg"), frame_debug)
+
+    # Nomes com timestamp ordenam cronologicamente — remove os mais antigos
+    # quando a pasta ultrapassa o limite.
+    arquivos = sorted(Path(FRAMES_DEBUG_DIR).glob("*.jpg"))
+    for antigo in arquivos[:-FRAMES_DEBUG_MAX] if len(arquivos) > FRAMES_DEBUG_MAX else []:
+        antigo.unlink(missing_ok=True)
+
+
 print(f"🚀 Carregando modelo {WEIGHTS} em device={DEVICE}...", flush=True)
 model = YOLO(WEIGHTS)
 
@@ -137,8 +160,9 @@ cam     = USBCamera(CAMERA_SOURCE, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE
 largura = CAMERA_WIDTH
 altura  = CAMERA_HEIGHT
 
-frame_count = 0
-t_log       = time.time()
+frame_count           = 0
+t_log                 = time.time()
+t_ultimo_frame_debug  = 0.0
 
 try:
     while True:
@@ -199,6 +223,11 @@ try:
             del contagem_frames[tid]
 
         print(f"👁️  pedras detectadas no frame: {len(ids_frame_atual)}", flush=True)
+
+        agora_ts = time.time()
+        if agora_ts - t_ultimo_frame_debug >= FRAMES_DEBUG_INTERVALO:
+            salvar_frame_debug(frame, detections)
+            t_ultimo_frame_debug = agora_ts
 
         if frame_count % 300 == 0:
             agora = time.time()

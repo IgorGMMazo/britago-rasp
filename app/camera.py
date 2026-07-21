@@ -10,21 +10,51 @@ Abstração da câmera via OpenCV. Aceita duas formas de fonte de vídeo:
    fonte de imagem via rede local.
    Exemplo: source="http://192.168.0.15:5000/video"
 
+Uma thread interna fica lendo continuamente da fonte e guarda só o frame
+mais recente — assim, se a inferência (mais lenta que a câmera) demorar
+para pedir o próximo frame, ela nunca fica processando um backlog atrasado,
+sempre pega o que há de mais atual. Se a leitura falhar repetidas vezes
+(stream caiu), a própria thread tenta reconectar sozinha.
+
 Interface compatível com o pipeline: read / get / release.
 """
 
+import threading
+import time
+
 import cv2
+
+FALHAS_PARA_RECONECTAR = 10
+ESPERA_ENTRE_TENTATIVAS = 2.0
 
 
 class USBCamera:
     def __init__(self, source=0, width: int = 1280, height: int = 720, framerate: int = 30):
-        self.width = width
-        self.height = height
-        self._cap = cv2.VideoCapture(source)
+        self.source    = source
+        self.width     = width
+        self.height    = height
+        self.framerate = framerate
+
+        self._cap          = None
+        self._frame_lock    = threading.Lock()
+        self._frame_atual   = None
+        self._frame_novo    = False
+        self._encerrar      = False
+
+        self._abrir_captura()
+
+        self._thread = threading.Thread(target=self._loop_leitura, daemon=True)
+        self._thread.start()
+
+    def _abrir_captura(self):
+        if self._cap is not None:
+            self._cap.release()
+
+        self._cap = cv2.VideoCapture(self.source)
 
         if not self._cap.isOpened():
             raise RuntimeError(
-                f"Não foi possível abrir a fonte de vídeo '{source}'.\n"
+                f"Não foi possível abrir a fonte de vídeo '{self.source}'.\n"
                 "Se for câmera USB local: verifique com 'v4l2-ctl --list-devices'\n"
                 "e confira se o dispositivo aparece como /dev/video0 (ou similar).\n"
                 "Se for stream de rede: confirme que o servidor (ex.: webcam_server.py)\n"
@@ -34,27 +64,56 @@ class USBCamera:
         # Nota: em streams de rede (URL), essas chamadas geralmente são
         # ignoradas silenciosamente pelo OpenCV — a resolução real é a que
         # o servidor de origem está transmitindo, não a que pedimos aqui.
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self._cap.set(cv2.CAP_PROP_FPS, framerate)
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self._cap.set(cv2.CAP_PROP_FPS, self.framerate)
 
         largura_real = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         altura_real  = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         print(
             f"🎥 Fonte de vídeo iniciada: {largura_real}x{altura_real} "
-            f"(source={source!r}, pedido {width}x{height})",
+            f"(source={self.source!r}, pedido {self.width}x{self.height})",
             flush=True,
         )
 
+    def _loop_leitura(self):
+        falhas_seguidas = 0
+
+        while not self._encerrar:
+            ret, frame = self._cap.read()
+
+            if not ret:
+                falhas_seguidas += 1
+                print(f"⚠️  Erro na captura do frame ({falhas_seguidas}/{FALHAS_PARA_RECONECTAR})", flush=True)
+
+                if falhas_seguidas >= FALHAS_PARA_RECONECTAR:
+                    print("🔁 Muitas falhas seguidas — tentando reconectar à fonte de vídeo...", flush=True)
+                    try:
+                        self._abrir_captura()
+                        falhas_seguidas = 0
+                    except RuntimeError as e:
+                        print(f"❌ Falha ao reconectar: {e}", flush=True)
+                        time.sleep(ESPERA_ENTRE_TENTATIVAS)
+                else:
+                    time.sleep(0.05)
+                continue
+
+            falhas_seguidas = 0
+            with self._frame_lock:
+                self._frame_atual = frame
+                self._frame_novo  = True
+
     def read(self):
-        ret, frame = self._cap.read()
-        if not ret:
-            print("⚠️  Erro na captura do frame", flush=True)
-            return False, None
-        return True, frame
+        with self._frame_lock:
+            if not self._frame_novo:
+                return False, None
+            self._frame_novo = False
+            return True, self._frame_atual
 
     def get(self, prop):
         return self._cap.get(prop)
 
     def release(self):
+        self._encerrar = True
+        self._thread.join(timeout=2)
         self._cap.release()
