@@ -21,7 +21,7 @@ if [ ! -f "$WEIGHTS_PATH" ]; then
     exit 1
 fi
 
-mkdir -p "${PASTA_SAIDA:-pedras_grandes}"
+mkdir -p "${PASTA_SAIDA:-pedras_grandes}" "${PASTA_ENVIADAS:-pedras_enviadas}"
 
 echo "🚀 Iniciando britago-rasp..."
 python3 app/inferencia.py &

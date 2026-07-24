@@ -34,7 +34,7 @@ pip install -r requirements.txt
 
 echo ""
 echo "=== [4/4] Preparando estrutura ==="
-mkdir -p weights pedras_grandes
+mkdir -p weights pedras_grandes pedras_enviadas
 
 if [ ! -f .env ]; then
     cp .env.example .env

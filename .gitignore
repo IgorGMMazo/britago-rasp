@@ -12,6 +12,10 @@ __pycache__/
 # Frames de debug periódicos (gerados em runtime)
 frames_debug/
 
+# Recortes de pedras: fila de envio e histórico já enviado (gerados em runtime)
+pedras_grandes/
+pedras_enviadas/
+
 # Imagens de teste (descomente se não quiser versionar)
 # teste.jpg
 # *.jpg
