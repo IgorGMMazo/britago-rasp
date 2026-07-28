@@ -10,6 +10,7 @@ import os
 import cv2
 import time
 import queue
+import subprocess
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -59,6 +60,68 @@ ROI_Y    = _env_int("ROI_Y", 44)
 ROI_W    = _env_int("ROI_W", 945)
 ROI_H    = _env_int("ROI_H", 674)
 AREA_ROI = ROI_W * ROI_H
+
+# ── Diagnóstico de saúde (RAM/temperatura/throttling) ──────────────────────
+# Ajuda a investigar travamentos após rodar por muito tempo: se o processo
+# vazar memória (há relatos conhecidos disso em model.track(persist=True) do
+# ultralytics) ou o Pi estiver superaquecendo, isso aparece nos logs do
+# systemd (journalctl -u britago) bem antes do próximo travamento, sem
+# precisar reproduzir o problema pra descobrir a causa.
+
+_FLAGS_THROTTLED = {
+    0:  "under-voltage (agora)",
+    1:  "freq limitada (agora)",
+    2:  "throttled (agora)",
+    3:  "limite térmico soft (agora)",
+    16: "under-voltage (já ocorreu)",
+    17: "freq limitada (já ocorreu)",
+    18: "throttled (já ocorreu)",
+    19: "limite térmico soft (já ocorreu)",
+}
+
+
+def memoria_rss_mb():
+    try:
+        with open("/proc/self/status") as f:
+            for linha in f:
+                if linha.startswith("VmRSS:"):
+                    return int(linha.split()[1]) / 1024
+    except Exception:
+        return None
+    return None
+
+
+def temperatura_cpu_c():
+    try:
+        saida = subprocess.run(
+            ["vcgencmd", "measure_temp"], capture_output=True, text=True, timeout=2
+        )
+        if saida.returncode == 0:
+            # formato: "temp=53.8'C"
+            return float(saida.stdout.split("=")[1].split("'")[0])
+    except Exception:
+        pass
+
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return int(f.read().strip()) / 1000
+    except Exception:
+        return None
+
+
+def status_throttling():
+    try:
+        saida = subprocess.run(
+            ["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=2
+        )
+        if saida.returncode != 0:
+            return None
+        bitmask = int(saida.stdout.strip().split("=")[1], 16)
+        ativos = [msg for bit, msg in _FLAGS_THROTTLED.items() if bitmask & (1 << bit)]
+        return ", ".join(ativos) if ativos else "OK"
+    except Exception:
+        return None
+
 
 # ── Frames de debug periódicos: 1 a cada N segundos, com ROI + detecções ──
 FRAMES_DEBUG_DIR       = os.getenv("FRAMES_DEBUG_DIR", "frames_debug")
@@ -233,11 +296,21 @@ try:
             agora = time.time()
             fps   = 300.0 / (agora - t_log + 1e-9)
             t_log = agora
+
+            mem_mb   = memoria_rss_mb()
+            temp_c   = temperatura_cpu_c()
+            throttle = status_throttling()
+
+            mem_str      = f"{mem_mb:.0f}MB" if mem_mb is not None else "?"
+            temp_str     = f"{temp_c:.1f}°C" if temp_c is not None else "?"
+            throttle_str = throttle if throttle is not None else "?"
+
             with lock_contadores:
                 print(
                     f"❤️  frames={frame_count} | fps≈{fps:.1f} | "
                     f"salvas={fotos_salvas} | bloqueadas={fotos_bloqueadas} | "
-                    f"fila={fila_processamento.qsize()}",
+                    f"fila={fila_processamento.qsize()} | "
+                    f"ram={mem_str} | temp={temp_str} | throttle={throttle_str}",
                     flush=True,
                 )
 

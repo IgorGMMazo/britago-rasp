@@ -15,6 +15,12 @@ sudo apt-get install -y \
     libatlas-base-dev \
     v4l-utils
 
+# vcgencmd (temperatura/throttling da GPU) não é essencial e nem sempre está
+# disponível nos repositórios do Ubuntu Server — instala best-effort, sem
+# travar o setup se não existir. Sem ele, o log de saúde ainda mostra a
+# temperatura via /sys/class/thermal (só o throttle status fica "?").
+sudo apt-get install -y libraspberrypi-bin || echo "⚠️  libraspberrypi-bin indisponível — throttle status ficará como '?' nos logs."
+
 echo ""
 echo "=== [2/4] Criando ambiente virtual ==="
 python3 -m venv venv
