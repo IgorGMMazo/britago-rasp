@@ -17,14 +17,15 @@ sempre pega o que há de mais atual. Se a leitura falhar repetidas vezes
 (stream caiu), a própria thread tenta reconectar sozinha, com backoff
 exponencial pra não martelar a câmera/rede quando ela já está com problema.
 
-Uma segunda thread (watchdog) cobre um caso que o reconnect normal não
-pega: streams de rede via FFmpeg podem deixar cap.read() bloqueado
-indefinidamente (nunca retorna nem sucesso nem falha) quando a conexão cai
-de um jeito específico — isso é um comportamento conhecido do backend
-FFmpeg do OpenCV, não um bug deste código (ver opencv/opencv#22677). Sem
-esse watchdog, esse tipo de queda trava a captura pra sempre, exigindo
-reiniciar o processo manualmente. O watchdog força a conexão a fechar se
-nenhum frame novo chegar por muito tempo, o que libera o read() bloqueado.
+Streams de rede via FFmpeg podem deixar cap.open()/cap.read() bloqueado por
+bastante tempo numa queda de conexão. Isso é resolvido com os timeouts
+internos do próprio OpenCV (CAP_PROP_OPEN_TIMEOUT_MSEC/CAP_PROP_READ_TIMEOUT_MSEC)
+— NÃO com uma segunda thread chamando release() no objeto de fora: essa
+abordagem foi tentada aqui antes e causou um segfault, porque release()
+rodando ao mesmo tempo que read() no mesmo VideoCapture (duas threads, um
+objeto só) corrompe o estado interno do FFmpeg. Os timeouts nativos
+resolvem o mesmo problema (não travar pra sempre) sem esse risco, porque
+rodam dentro da própria chamada bloqueante, numa thread só.
 
 Interface compatível com o pipeline: read / get / release.
 """
@@ -42,11 +43,15 @@ import cv2
 # ignora essa variável, então é seguro deixar sempre setada.
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
-FALHAS_PARA_RECONECTAR  = 10
-ESPERA_INICIAL          = 2.0
-ESPERA_MAXIMA           = 30.0
-TIMEOUT_SEM_FRAME        = 15.0  # watchdog: força reconexão se nenhum frame novo chegar nesse intervalo
-INTERVALO_CHECAGEM_WATCHDOG = 2.0
+FALHAS_PARA_RECONECTAR = 10
+ESPERA_INICIAL         = 2.0
+ESPERA_MAXIMA          = 30.0
+
+# Timeout nativo do OpenCV/FFmpeg para abrir a conexão ou ler um frame. Sem
+# isso o default é ~30s (foi o que vimos travar de verdade em produção);
+# baixamos pra reconectar mais rápido quando a rede cai. Só vale pro backend
+# FFmpeg (streams de rede) — é ignorado pelo V4L2 (câmera USB local).
+TIMEOUT_FFMPEG_MSEC = 15000
 
 
 class USBCamera:
@@ -57,29 +62,29 @@ class USBCamera:
         self.framerate = framerate
 
         self._cap                = None
-        self._cap_lock            = threading.Lock()
+        self._cap_lock           = threading.Lock()
         self._frame_lock         = threading.Lock()
         self._frame_atual        = None
         self._frame_novo         = False
         self._encerrar           = False
         self._ts_conexao_aberta  = None
         self._ts_ultima_queda    = None
-        self._ts_ultimo_frame    = time.time()
 
         self._abrir_captura()
 
         self._thread = threading.Thread(target=self._loop_leitura, daemon=True)
         self._thread.start()
 
-        self._thread_watchdog = threading.Thread(target=self._loop_watchdog, daemon=True)
-        self._thread_watchdog.start()
-
     def _abrir_captura(self):
         with self._cap_lock:
             if self._cap is not None:
                 self._cap.release()
 
-            self._cap = cv2.VideoCapture(self.source)
+            cap = cv2.VideoCapture()
+            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, TIMEOUT_FFMPEG_MSEC)
+            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, TIMEOUT_FFMPEG_MSEC)
+            cap.open(self.source)
+            self._cap = cap
 
             if not self._cap.isOpened():
                 raise RuntimeError(
@@ -100,7 +105,6 @@ class USBCamera:
             largura_real = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             altura_real  = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self._ts_conexao_aberta = time.time()
-            self._ts_ultimo_frame   = time.time()
             print(
                 f"🎥 [{datetime.now().strftime('%H:%M:%S')}] Fonte de vídeo iniciada: "
                 f"{largura_real}x{altura_real} "
@@ -159,28 +163,6 @@ class USBCamera:
             with self._frame_lock:
                 self._frame_atual = frame
                 self._frame_novo  = True
-            self._ts_ultimo_frame = time.time()
-
-    def _loop_watchdog(self):
-        while not self._encerrar:
-            time.sleep(INTERVALO_CHECAGEM_WATCHDOG)
-
-            if time.time() - self._ts_ultimo_frame > TIMEOUT_SEM_FRAME:
-                print(
-                    f"🐢 [{datetime.now().strftime('%H:%M:%S')}] Nenhum frame novo há "
-                    f"{TIMEOUT_SEM_FRAME:.0f}s — captura pode estar travada, forçando reconexão...",
-                    flush=True,
-                )
-                # cap.read() do backend FFmpeg pode ficar bloqueado pra sempre numa
-                # queda de conexão de rede; fechar o cap de outra thread libera essa
-                # chamada bloqueada (ela retorna com falha) e deixa o _loop_leitura
-                # seguir com a reconexão normal dele.
-                with self._cap_lock:
-                    if self._cap is not None:
-                        self._cap.release()
-                # Evita disparar de novo em loop enquanto o _loop_leitura ainda não
-                # teve chance de perceber a falha e reabrir.
-                self._ts_ultimo_frame = time.time()
 
     def read(self):
         with self._frame_lock:
@@ -196,7 +178,6 @@ class USBCamera:
     def release(self):
         self._encerrar = True
         self._thread.join(timeout=2)
-        self._thread_watchdog.join(timeout=2)
         with self._cap_lock:
             if self._cap is not None:
                 self._cap.release()
