@@ -10,12 +10,14 @@ import os
 import cv2
 import time
 import queue
+import base64
 import subprocess
 import threading
 from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+import requests
 from ultralytics import YOLO
 
 # Workaround: fuse() do ultralytics troca para forward_fuse, que causa
@@ -39,6 +41,13 @@ def _env_int(nome, padrao):
 WEIGHTS     = os.getenv("WEIGHTS", "weights/best.pt")
 PASTA_SAIDA = os.getenv("PASTA_SAIDA", "pedras_grandes")
 DEVICE      = os.getenv("DEVICE", "cpu")
+
+# Webhook de debug: se definido, envia TODO frame em que alguma pedra foi
+# identificada dentro do ROI (mesmo as que nunca viram "grande" o bastante
+# pra passar pelos filtros de PASTA_SAIDA). Serve pra diagnosticar se a
+# detecção está funcionando quando pedras_grandes/ fica vazia. Opcional —
+# se não for setado, esse envio fica desligado.
+URL_WEBHOOK_DEBUG = os.getenv("URL_WEBHOOK_DEBUG", "")
 
 _camera_raw = os.getenv("CAMERA_INDEX", "0")
 CAMERA_SOURCE = int(_camera_raw) if _camera_raw.isdigit() else _camera_raw
@@ -190,17 +199,53 @@ thread_filtro = threading.Thread(target=worker_filtro_hashing, daemon=True)
 thread_filtro.start()
 
 
+# ── Thread de envio ao webhook de debug (todas as pedras identificadas) ────
+fila_webhook_debug = queue.Queue()
+
+
+def worker_webhook_debug():
+    print("📡 Módulo de debug (todas as pedras identificadas) inicializado.", flush=True)
+    while True:
+        item = fila_webhook_debug.get()
+        if item is None:
+            break
+
+        jpg_bytes, nome_arquivo = item
+        try:
+            payload = {
+                "filename": nome_arquivo,
+                "mimetype": "image/jpeg",
+                "image_base64": base64.b64encode(jpg_bytes).decode("utf-8"),
+            }
+            response = requests.post(URL_WEBHOOK_DEBUG, json=payload, timeout=10)
+            if response.status_code != 200:
+                print(f"⚠️  Webhook de debug retornou {response.status_code}: {response.text}", flush=True)
+        except Exception as e:
+            print(f"❌ Falha ao enviar frame de debug: {e}", flush=True)
+
+        fila_webhook_debug.task_done()
+
+
+if URL_WEBHOOK_DEBUG:
+    threading.Thread(target=worker_webhook_debug, daemon=True).start()
+
+
 # ── Detecção e rastreamento ────────────────────────────────────────────────
 def ponto_dentro_roi(cx, cy, rx, ry, rw, rh) -> bool:
     return rx <= cx <= rx + rw and ry <= cy <= ry + rh
 
 
-def salvar_frame_debug(frame, detections):
-    frame_debug = frame.copy()
-    cv2.rectangle(frame_debug, (ROI_X, ROI_Y), (ROI_X + ROI_W, ROI_Y + ROI_H), (0, 255, 0), 2)
+def desenhar_deteccoes(frame, detections):
+    frame_desenhado = frame.copy()
+    cv2.rectangle(frame_desenhado, (ROI_X, ROI_Y), (ROI_X + ROI_W, ROI_Y + ROI_H), (0, 255, 0), 2)
     for i in range(len(detections)):
         dx1, dy1, dx2, dy2 = map(int, detections.xyxy[i])
-        cv2.rectangle(frame_debug, (dx1, dy1), (dx2, dy2), (0, 0, 255), 2)
+        cv2.rectangle(frame_desenhado, (dx1, dy1), (dx2, dy2), (0, 0, 255), 2)
+    return frame_desenhado
+
+
+def salvar_frame_debug(frame, detections):
+    frame_debug = desenhar_deteccoes(frame, detections)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
     cv2.imwrite(str(Path(FRAMES_DEBUG_DIR) / f"frame_{ts}.jpg"), frame_debug)
@@ -281,6 +326,13 @@ try:
                     fila_processamento.put((crop, crop.copy(), track_id, proporcao))
                     ids_salvos.add(track_id)
 
+        if URL_WEBHOOK_DEBUG and ids_frame_atual:
+            frame_anotado = desenhar_deteccoes(frame, detections)
+            ok_jpg, buffer = cv2.imencode(".jpg", frame_anotado)
+            if ok_jpg:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                fila_webhook_debug.put((buffer.tobytes(), f"frame_{ts}.jpg"))
+
         ids_sumidos = set(contagem_frames.keys()) - ids_frame_atual
         for tid in ids_sumidos:
             del contagem_frames[tid]
@@ -318,6 +370,8 @@ except KeyboardInterrupt:
     print("\n🛑 Encerrando inferência...", flush=True)
 finally:
     fila_processamento.put(None)
+    if URL_WEBHOOK_DEBUG:
+        fila_webhook_debug.put(None)
     cam.release()
     print(
         f"✅ Pipeline encerrado. Salvas={fotos_salvas} Bloqueadas={fotos_bloqueadas}",
