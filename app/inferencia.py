@@ -42,12 +42,13 @@ WEIGHTS     = os.getenv("WEIGHTS", "weights/best.pt")
 PASTA_SAIDA = os.getenv("PASTA_SAIDA", "pedras_grandes")
 DEVICE      = os.getenv("DEVICE", "cpu")
 
-# Webhook de debug: se definido, envia TODO frame em que alguma pedra foi
-# identificada dentro do ROI (mesmo as que nunca viram "grande" o bastante
-# pra passar pelos filtros de PASTA_SAIDA). Serve pra diagnosticar se a
-# detecção está funcionando quando pedras_grandes/ fica vazia. Opcional —
-# se não for setado, esse envio fica desligado.
-URL_WEBHOOK_DEBUG = os.getenv("URL_WEBHOOK_DEBUG", "")
+# Webhook de debug: se definido, envia periodicamente o frame mais recente em
+# que alguma pedra foi identificada dentro do ROI (mesmo as que nunca viram
+# "grande" o bastante pra passar pelos filtros de PASTA_SAIDA). Serve pra
+# diagnosticar se a detecção está funcionando quando pedras_grandes/ fica
+# vazia. Opcional — se não for setado, esse envio fica desligado.
+URL_WEBHOOK_DEBUG      = os.getenv("URL_WEBHOOK_DEBUG", "")
+INTERVALO_WEBHOOK_DEBUG = _env_int("INTERVALO_WEBHOOK_DEBUG", 5)
 
 _camera_raw = os.getenv("CAMERA_INDEX", "0")
 CAMERA_SOURCE = int(_camera_raw) if _camera_raw.isdigit() else _camera_raw
@@ -200,7 +201,11 @@ thread_filtro.start()
 
 
 # ── Thread de envio ao webhook de debug (todas as pedras identificadas) ────
-fila_webhook_debug = queue.Queue()
+# maxsize=1: guarda só o frame mais recente pendente de envio. Se o worker
+# ainda não terminou de mandar o anterior quando um novo frame chega, o
+# anterior é descartado (ver bloco de produção abaixo) em vez de enfileirar
+# — evita acumular atraso quando o POST ao n8n demora.
+fila_webhook_debug = queue.Queue(maxsize=1)
 
 
 def worker_webhook_debug():
@@ -268,9 +273,10 @@ cam     = USBCamera(CAMERA_SOURCE, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE
 largura = CAMERA_WIDTH
 altura  = CAMERA_HEIGHT
 
-frame_count           = 0
-t_log                 = time.time()
-t_ultimo_frame_debug  = 0.0
+frame_count            = 0
+t_log                  = time.time()
+t_ultimo_frame_debug   = 0.0
+t_ultimo_webhook_debug = 0.0
 
 try:
     while True:
@@ -326,12 +332,26 @@ try:
                     fila_processamento.put((crop, crop.copy(), track_id, proporcao))
                     ids_salvos.add(track_id)
 
-        if URL_WEBHOOK_DEBUG and ids_frame_atual:
+        agora_ts = time.time()
+
+        if (
+            URL_WEBHOOK_DEBUG
+            and ids_frame_atual
+            and agora_ts - t_ultimo_webhook_debug >= INTERVALO_WEBHOOK_DEBUG
+        ):
             frame_anotado = desenhar_deteccoes(frame, detections)
             ok_jpg, buffer = cv2.imencode(".jpg", frame_anotado)
             if ok_jpg:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                # Descarta o frame pendente antigo (se o worker ainda não
+                # enviou) para sempre priorizar o mais recente na fila.
+                if fila_webhook_debug.full():
+                    try:
+                        fila_webhook_debug.get_nowait()
+                    except queue.Empty:
+                        pass
                 fila_webhook_debug.put((buffer.tobytes(), f"frame_{ts}.jpg"))
+                t_ultimo_webhook_debug = agora_ts
 
         ids_sumidos = set(contagem_frames.keys()) - ids_frame_atual
         for tid in ids_sumidos:
@@ -339,7 +359,6 @@ try:
 
         print(f"👁️  pedras detectadas no frame: {len(ids_frame_atual)}", flush=True)
 
-        agora_ts = time.time()
         if agora_ts - t_ultimo_frame_debug >= FRAMES_DEBUG_INTERVALO:
             salvar_frame_debug(frame, detections)
             t_ultimo_frame_debug = agora_ts
