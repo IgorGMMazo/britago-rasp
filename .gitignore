@@ -35,3 +35,6 @@ pedras_enviadas/
 .vscode/
 
 weights/
+
+# Ferramentas locais/descartáveis (ajuste de ROI etc.) — nunca vão pro Git
+local/

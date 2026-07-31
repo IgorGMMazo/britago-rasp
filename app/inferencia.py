@@ -162,7 +162,7 @@ def worker_filtro_hashing():
         if item is None:
             break
 
-        crop_comparacao, imagem_recortada, track_id, proporcao = item
+        crop_comparacao, imagem_recortada, track_id, proporcao, frame_completo = item
 
         img_pil    = Image.fromarray(cv2.cvtColor(crop_comparacao, cv2.COLOR_BGR2RGB))
         hash_atual = imagehash.dhash(img_pil)
@@ -181,9 +181,11 @@ def worker_filtro_hashing():
                 fotos_bloqueadas += 1
             print(f"🔁 dHash BLOQUEOU  ID#{track_id} | distância={menor_distancia} (≤{LIMIAR_HAMMING})", flush=True)
         else:
-            ts   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            nome = str(Path(PASTA_SAIDA) / f"pedra_id{track_id}_{ts}_crop.jpg")
-            cv2.imwrite(nome, imagem_recortada)
+            ts        = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            nome_crop = str(Path(PASTA_SAIDA) / f"pedra_id{track_id}_{ts}_crop.jpg")
+            nome_full = str(Path(PASTA_SAIDA) / f"pedra_id{track_id}_{ts}_full.jpg")
+            cv2.imwrite(nome_crop, imagem_recortada)
+            cv2.imwrite(nome_full, frame_completo)
 
             historico_hashes.append(hash_atual)
             if len(historico_hashes) > max_historico:
@@ -191,7 +193,11 @@ def worker_filtro_hashing():
 
             with lock_contadores:
                 fotos_salvas += 1
-            print(f"📸 SALVO           ID#{track_id} | {proporcao*100:.1f}% do ROI | {Path(nome).name}", flush=True)
+            print(
+                f"📸 SALVO           ID#{track_id} | {proporcao*100:.1f}% do ROI | "
+                f"{Path(nome_crop).name} + {Path(nome_full).name}",
+                flush=True,
+            )
 
         fila_processamento.task_done()
 
@@ -215,11 +221,12 @@ def worker_webhook_debug():
         if item is None:
             break
 
-        jpg_bytes, nome_arquivo = item
+        jpg_bytes, nome_arquivo, qtd_pedras = item
         try:
             payload = {
                 "filename": nome_arquivo,
                 "mimetype": "image/jpeg",
+                "pedras_detectadas": qtd_pedras,
                 "image_base64": base64.b64encode(jpg_bytes).decode("utf-8"),
             }
             response = requests.post(URL_WEBHOOK_DEBUG, json=payload, timeout=10)
@@ -329,7 +336,7 @@ try:
                 crop = frame_original_limpo[cy1:cy2, cx1:cx2]
 
                 if crop.size > 0:
-                    fila_processamento.put((crop, crop.copy(), track_id, proporcao))
+                    fila_processamento.put((crop, crop.copy(), track_id, proporcao, frame_original_limpo))
                     ids_salvos.add(track_id)
 
         agora_ts = time.time()
@@ -350,7 +357,7 @@ try:
                         fila_webhook_debug.get_nowait()
                     except queue.Empty:
                         pass
-                fila_webhook_debug.put((buffer.tobytes(), f"frame_{ts}.jpg"))
+                fila_webhook_debug.put((buffer.tobytes(), f"frame_{ts}.jpg", len(ids_frame_atual)))
                 t_ultimo_webhook_debug = agora_ts
 
         ids_sumidos = set(contagem_frames.keys()) - ids_frame_atual
