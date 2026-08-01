@@ -8,6 +8,7 @@ A triagem por dHash evita salvar a mesma pedra repetidamente.
 
 import os
 import cv2
+import json
 import time
 import queue
 import base64
@@ -162,7 +163,7 @@ def worker_filtro_hashing():
         if item is None:
             break
 
-        crop_comparacao, imagem_recortada, track_id, proporcao, frame_completo = item
+        crop_comparacao, imagem_recortada, track_id, proporcao, frame_completo, confianca = item
 
         img_pil    = Image.fromarray(cv2.cvtColor(crop_comparacao, cv2.COLOR_BGR2RGB))
         hash_atual = imagehash.dhash(img_pil)
@@ -184,8 +185,18 @@ def worker_filtro_hashing():
             ts        = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             nome_crop = str(Path(PASTA_SAIDA) / f"pedra_id{track_id}_{ts}_crop.jpg")
             nome_full = str(Path(PASTA_SAIDA) / f"pedra_id{track_id}_{ts}_full.jpg")
+            nome_meta = str(Path(PASTA_SAIDA) / f"pedra_id{track_id}_{ts}_meta.json")
             cv2.imwrite(nome_crop, imagem_recortada)
             cv2.imwrite(nome_full, frame_completo)
+            with open(nome_meta, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "arquivo_crop": Path(nome_crop).name,
+                        "arquivo_full": Path(nome_full).name,
+                        "confianca": confianca,
+                    },
+                    f,
+                )
 
             historico_hashes.append(hash_atual)
             if len(historico_hashes) > max_historico:
@@ -336,7 +347,10 @@ try:
                 crop = frame_original_limpo[cy1:cy2, cx1:cx2]
 
                 if crop.size > 0:
-                    fila_processamento.put((crop, crop.copy(), track_id, proporcao, frame_original_limpo))
+                    confianca = float(detections.confidence[i]) if detections.confidence is not None else None
+                    fila_processamento.put(
+                        (crop, crop.copy(), track_id, proporcao, frame_original_limpo, confianca)
+                    )
                     ids_salvos.add(track_id)
 
         agora_ts = time.time()
